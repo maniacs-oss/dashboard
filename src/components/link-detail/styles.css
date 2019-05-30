@@ -85,6 +85,15 @@
   right: 0px;
 }
 
+/* The link detail empty state is visible when a link is loading for the first time or cannot be
+ * found. */
+.link-detail-empty {
+  text-align: center;
+  margin-top: 100px;
+  font-family: "Lato", Helvetica, Arial, sans-serif;
+  font-size: 24px;
+}
+
 /* The link detail card title--a textbox--is rendered at the top of the link detail card and used to
  * change the name of the link the detail card represents. */
 .link-detail-title {
@@ -301,4 +310,39 @@
   font-size: 18px;
   display: inline-block;
   color: #de3535;
+}
+
+.link-detail-last-sync-time {
+  justify-content: flex-end;
+  align-items: flex-end;
+  color: #ffffff;
+}
+
+.link-detail-refresh-button {
+  cursor: pointer;
+
+  margin-left: 8px;
+  width: 3%;
+
+  position: relative;
+  top: -1px;
+}
+
+.link-detail-refresh-button:active { opacity: 0.8; }
+
+.link-detail-repository-edit-fork-desc {
+  font-size: 18px;
+  margin-top: 16px;
+  margin-bottom: 16px;
+  line-height: 1.4;
+}
+
+.link-detail-repository-edit-fork-desc a {
+  color: #fff;
+  margin-left: 5px;
+}
+
+.link-detail-repository-edit-fork-desc code {
+  background-color: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
 }

@@ -1,24 +1,48 @@
 import * as React from 'react';
 import './styles.css';
 import ColorHash from 'color-hash';
-import debounce from 'lodash.debounce';
+import lodashDebounce from 'lodash.debounce';
 import classnames from 'classnames';
+import mixpanel from 'mixpanel-browser';
 
 import { connect } from 'react-redux';
+
+import TimeAgo from 'react-timeago';
 
 import Switch from '../toggle-switch/index';
 import LinkError from '../link-error/index';
 import Button from '../button/index';
+import LinkDetailWebhook from '../link-detail-webhook/index';
 
 import collectionLinksEnable from '../../actions/collection/links/enable';
 import collectionLinksSave from '../../actions/collection/links/save';
 import collectionLinksDelete from '../../actions/collection/links/delete';
 import collectionLinksResync from '../../actions/collection/links/resync';
 import collectionLinksHideSyncStatus from '../../actions/collection/links/hide-sync-status';
+import collectionLinksRefresh from '../../actions/collection/links/refresh';
+
+import RefreshIcon from '../../images/Refresh Icon.png';
 
 import { API_URL } from '../../constants';
 
+// When testing, don't debounce. It makes assertions harder.
+// FIXME: a bit of a hack. Other then timing, is there a way around this?
+const debounce = process.env.NODE_ENV === 'test' ? a => a : lodashDebounce;
+
 const ch = new ColorHash();
+const githubMatchExpression = /https?:\/\/github\.com\//;
+
+/**
+ * Remove the `github.com`, if the user pasted a full GitHub link.
+ * @param {string} url - a full GitHub link as https://github.com/backstrokeapp/dashboard
+ * @return {string} - the fixed url if the GitHub url pattern is found, otherwise the original url
+ */
+function removeGithubPrefixFromRepositoryUrl(url) {
+  if (url.search(githubMatchExpression) > -1) {
+    url = url.replace(githubMatchExpression, "");
+  }
+  return url
+}
 
 function getDefaultBranch(branchList) {
   if (branchList.indexOf('master') !== -1) {
@@ -156,10 +180,26 @@ export class LinkDetail extends React.Component {
   render() {
     const link = this.props.initialLinkState;
 
+    process.env.REACT_APP_MIXPANEL_TOKEN && mixpanel.track('Rendered link detail page', {
+      props: this.props,
+      state: this.state,
+    });
+
     if (!link) {
-      return <div className="link-detail-empty">
-        No such link was found.
-      </div>;
+      process.env.REACT_APP_MIXPANEL_TOKEN && mixpanel.track('Rendered empty link detail page', {
+        props: this.props,
+        state: this.state,
+      });
+
+      if (this.props.loading) {
+        return <div className="link-detail-empty">
+          Loading link...
+        </div>;
+      } else {
+        return <div className="link-detail-empty">
+          No such link was found.
+        </div>;
+      }
     }
 
     return <div>
@@ -189,6 +229,7 @@ export class LinkDetail extends React.Component {
             onClick={() => {
               const linkWasTriggeredButResponseIsPending = link.lastWebhookSync && link.lastWebhookSync.status !== 'TRIGGERED';
               const noWebhookSynced = !link.lastWebhookSync;
+
               if ((linkWasTriggeredButResponseIsPending || noWebhookSynced) && link.enabled) {
                 this.props.onResyncLink(link)
               }
@@ -196,6 +237,19 @@ export class LinkDetail extends React.Component {
             disabled={link.enabled === false || (link.lastWebhookSync && link.lastWebhookSync.status === 'TRIGGERED')}
           >{link.lastWebhookSync && link.lastWebhookSync.status === 'TRIGGERED' ? 'Waiting...' : 'Resync'}</Button>
         </div>
+
+        {link.enabled && link.lastSyncedAt ?
+          <div className="link-detail-row link-detail-last-sync-time">
+            <span>Last synced: <TimeAgo date={ link.lastSyncedAt } /></span>
+            <img
+              className="link-detail-refresh-button"
+              onClick={() => {this.props.onRefreshSync(link.id)}}
+              src={RefreshIcon}
+              alt="Refresh last synced time"
+              title="Refresh last synced time"
+            />
+          </div> : null
+        }
 
         {/* If a syncing operation is going on, show the status info in the view */}
         {link.lastWebhookSync ? <div className="link-detail-sync-status">
@@ -256,8 +310,20 @@ export class LinkDetail extends React.Component {
                 placeholder="username"
                 value={this.state.upstreamOwner}
                 onChange={e => {
-                  this.setState({upstreamOwner: e.target.value})
-                  this.fetchBranches('upstream');
+                  e.target.value = removeGithubPrefixFromRepositoryUrl(e.target.value);
+                  // If a string like "abc/def" is pasted into the textbox, then properly split it
+                  // into the two boxes.
+                  if (e.target.value.indexOf('/') !== -1) {
+                    const parts = e.target.value.split('/');
+                    this.setState({
+                      upstreamOwner: parts[0],
+                      upstreamRepo: parts[1],
+                    });
+                    this.fetchBranches('upstream');
+                  } else {
+                    this.setState({upstreamOwner: e.target.value})
+                    this.fetchBranches('upstream');
+                  }
                 }}
                 onKeyDown={e => {
                   // Skip to repo box when slash is pressed.
@@ -304,7 +370,7 @@ export class LinkDetail extends React.Component {
                 checked={this.state.forkType === 'fork-all'}
                 onChange={() => this.setState({forkType: 'fork-all'})}
               />
-              <label htmlFor="fork-all">All forks</label>
+              <label htmlFor="fork-all">All forks with label</label>
               <input
                 type="radio"
                 id="one-fork"
@@ -314,6 +380,13 @@ export class LinkDetail extends React.Component {
               />
               <label htmlFor="one-fork">One fork</label>
             </div>
+            {this.state.forkType === 'fork-all' ? <div className="link-detail-repository-edit-fork-desc">
+              Sync any changes from the upstream repository to any fork of the upstream by adding a
+              label called <code>backstroke-sync</code> to any forks you wish to sync changes to.
+              <a target="_blank" rel="noopener noreferrer" href="https://help.github.com/articles/creating-a-label/">
+                Here's how to create a label on a fork.
+              </a>
+            </div> : null}
             {this.state.forkType === 'repo' ? <div>
               <div className="link-detail-repository-edit-row-owner-name">
                 <input
@@ -321,8 +394,20 @@ export class LinkDetail extends React.Component {
                   placeholder="username"
                   value={this.state.forkOwner}
                   onChange={e => {
-                    this.setState({forkOwner: e.target.value})
-                    this.fetchBranches('fork');
+                    e.target.value = removeGithubPrefixFromRepositoryUrl(e.target.value);
+                    // If a string like "abc/def" is pasted into the textbox, then properly split it
+                    // into the two boxes.
+                    if (e.target.value.indexOf('/') < e.target.value.length) {
+                      const parts = e.target.value.split('/');
+                      this.setState({
+                        forkOwner: parts[0],
+                        forkRepo: parts[1],
+                      });
+                      this.fetchBranches('fork');
+                    } else {
+                      this.setState({forkOwner: e.target.value});
+                      this.fetchBranches('fork');
+                    }
                   }}
                   onKeyDown={e => {
                     // Skip to repo box when slash is pressed.
@@ -339,8 +424,8 @@ export class LinkDetail extends React.Component {
                   value={this.state.forkRepo}
                   ref={ref => this.forkRepoBox = ref}
                   onChange={e => {
-                    this.setState({forkRepo: e.target.value})
-                    this.fetchBranches('fork');
+                    this.setState({forkRepo: e.target.value}, () =>
+                      this.fetchBranches('fork'));
                   }}
                 />
               </div>
@@ -356,6 +441,9 @@ export class LinkDetail extends React.Component {
             </div> : null}
           </div>
         </div>
+
+        {/* Render a dropdown that shows the webhook url inside */}
+        <LinkDetailWebhook link={link} />
 
         <div className="link-detail-save-button-container">
           <Button
@@ -402,6 +490,9 @@ export default connect(state => {
     },
     onHideLinkSyncStatus(link) {
       dispatch(collectionLinksHideSyncStatus(link));
+    },
+    onRefreshSync(id) {
+      dispatch(collectionLinksRefresh(id));
     },
   };
 })(function(props) {
